@@ -46,12 +46,12 @@ def parse_encoder(parser, arg_str=None):
 
     enc_parser.set_defaults(conv_type='SAGE',
                         method_type='order',
-                        dataset='syn',
+                        dataset='enzymes',
                         n_layers=8,
                         batch_size=16,
                         hidden_dim=64,
                         skip="learnable",
-                        dropout=0.0,
+                        dropout=0.01,
                         n_batches=10000,
                         opt='adam',   # opt_enc_parser
                         opt_scheduler='none',

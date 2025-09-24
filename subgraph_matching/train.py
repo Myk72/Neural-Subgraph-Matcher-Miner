@@ -188,6 +188,7 @@ def train_loop(args):
         workers.append(worker)
 
     if args.test:
+        print(f'Debug: len of test_pts: {len(test_pts)} with batch size {args.batch_size}')
         validation(args, model, test_pts, logger, 0, 0, verbose=True)
     else:
         batch_n = 0

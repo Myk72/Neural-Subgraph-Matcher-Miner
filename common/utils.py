@@ -17,7 +17,7 @@ import warnings
 from common import feature_preprocess
 
 
-def sample_neigh(graphs, size, graph_type):
+def sample_neigh(graphs, size, graph_type="undirected"):
     ps = np.array([len(g) for g in graphs], dtype=float)
     ps /= np.sum(ps)
     dist = stats.rv_discrete(values=(np.arange(len(graphs)), ps))
