@@ -1,9 +1,4 @@
 """Defines all graph embedding models"""
-from functools import reduce
-import random
-
-import networkx as nx
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,77 +9,14 @@ from common import utils
 from common import feature_preprocess
 
 # GNN -> concat -> MLP graph classification baseline
-class BaselineMLP(nn.Module):
-    def __init__(self, input_dim, hidden_dim, args):
-        super(BaselineMLP, self).__init__()
-        self.emb_model = SkipLastGNN(input_dim, hidden_dim, hidden_dim, args)
-        self.mlp = nn.Sequential(nn.Linear(2 * hidden_dim, 256), nn.ReLU(),
-            nn.Linear(256, 2))
-
-    def forward(self, emb_motif, emb_motif_mod):
-        pred = self.mlp(torch.cat((emb_motif, emb_motif_mod), dim=1))
-        pred = F.log_softmax(pred, dim=1)
-        return pred
-
-    def predict(self, pred):
-        return pred#.argmax(dim=1)
-
-    def criterion(self, pred, _, label):
-        return F.nll_loss(pred, label)
-
-# Order embedder model -- contains a graph embedding model `emb_model`
-class OrderEmbedder(nn.Module):
-    def __init__(self, input_dim, hidden_dim, args):
-        super(OrderEmbedder, self).__init__()
-        self.emb_model = SkipLastGNN(input_dim, hidden_dim, hidden_dim, args)
-        self.margin = args.margin
-        self.use_intersection = False
-
-        self.clf_model = nn.Sequential(nn.Linear(1, 2), nn.LogSoftmax(dim=-1))
-
-    def forward(self, emb_as, emb_bs):
-        return emb_as, emb_bs
-
-    def predict(self, pred):
-        """Predict if b is a subgraph of a (batched), where emb_as, emb_bs = pred.
-
-        pred: list (emb_as, emb_bs) of embeddings of graph pairs
-
-        Returns: list of bools (whether a is subgraph of b in the pair)
-        """
-        emb_as, emb_bs = pred
-
-        e = torch.sum(torch.max(torch.zeros_like(emb_as,
-            device=emb_as.device), emb_bs - emb_as)**2, dim=1)
-        return e
-
-    def criterion(self, pred, intersect_embs, labels):
-        """Loss function for order emb.
-        The e term is the amount of violation (if b is a subgraph of a).
-        For positive examples, the e term is minimized (close to 0); 
-        for negative examples, the e term is trained to be at least greater than self.margin.
-
-        pred: lists of embeddings outputted by forward
-        intersect_embs: not used
-        labels: subgraph labels for each entry in pred
-        """
-        emb_as, emb_bs = pred
-        e = torch.sum(torch.max(torch.zeros_like(emb_as,
-            device=utils.get_device()), emb_bs - emb_as)**2, dim=1)
-
-        margin = self.margin
-        e[labels == 0] = torch.max(torch.tensor(0.0,
-            device=utils.get_device()), margin - e)[labels == 0]
-
-        relation_loss = torch.sum(e)
-
-        return relation_loss
 
 class SkipLastGNN(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, args):
         super(SkipLastGNN, self).__init__()
         self.dropout = args.dropout
         self.n_layers = args.n_layers
+        self.skip = args.skip
+        self.conv_type = args.conv_type
 
         if len(feature_preprocess.FEATURE_AUGMENT) > 0:
             self.feat_preprocess = feature_preprocess.Preprocess(input_dim)
@@ -103,7 +35,7 @@ class SkipLastGNN(nn.Module):
         else:
             self.convs = nn.ModuleList()
 
-        if args.skip == 'learnable':
+        if self.skip == 'learnable':
             self.learnable_skip = nn.Parameter(torch.ones(self.n_layers,
                 self.n_layers))
 
@@ -122,18 +54,16 @@ class SkipLastGNN(nn.Module):
         post_input_dim = hidden_dim * (args.n_layers + 1)
         if args.conv_type == "PNA":
             post_input_dim *= 3
+
         self.post_mp = nn.Sequential(
-            nn.Linear(post_input_dim, hidden_dim), 
+            nn.Linear(post_input_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(),
             nn.Dropout(args.dropout),
-            nn.LeakyReLU(0.1),
-            nn.Linear(hidden_dim, output_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 256), 
-            nn.ReLU(),
-            nn.Linear(256, hidden_dim))
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+
         #self.batch_norm = nn.BatchNorm1d(output_dim, eps=1e-5, momentum=0.1)
-        self.skip = args.skip
-        self.conv_type = args.conv_type
 
     def build_conv_model(self, model_type, n_inner_layers):
         if model_type == "GCN":
@@ -208,6 +138,69 @@ class SkipLastGNN(nn.Module):
 
     def loss(self, pred, label):
         return F.nll_loss(pred, label)
+    
+
+class BaselineMLP(nn.Module):
+    def __init__(self, input_dim, hidden_dim, args):
+        super(BaselineMLP, self).__init__()
+        self.emb_model = SkipLastGNN(input_dim, hidden_dim, hidden_dim, args)
+        self.mlp = nn.Sequential(nn.Linear(2 * hidden_dim, 256), nn.ReLU(),
+            nn.Linear(256, 2))
+
+    def forward(self, emb_motif, emb_motif_mod):
+        pred = self.mlp(torch.cat((emb_motif, emb_motif_mod), dim=1))
+        pred = F.log_softmax(pred, dim=1)
+        return pred
+
+    def predict(self, pred):
+        return pred#.argmax(dim=1)
+
+    def criterion(self, pred, _, label):
+        return F.nll_loss(pred, label)
+
+# Order embedder model -- contains a graph embedding model `emb_model`
+class OrderEmbedder(nn.Module):
+    def __init__(self, input_dim, hidden_dim, args):
+        super(OrderEmbedder, self).__init__()
+        self.emb_model = SkipLastGNN(input_dim, hidden_dim, hidden_dim, args)
+        self.margin = args.margin
+        self.use_intersection = False
+
+        self.clf_model = nn.Sequential(nn.Linear(1, 2), nn.LogSoftmax(dim=-1))
+
+    def forward(self, emb_as, emb_bs):
+        return emb_as, emb_bs
+
+    def predict(self, pred):
+        """Predict if b is a subgraph of a (batched), where emb_as, emb_bs = pred.
+
+        pred: list (emb_as, emb_bs) of embeddings of graph pairs
+
+        Returns: list of bools (whether a is subgraph of b in the pair)
+        """
+        emb_as, emb_bs = pred
+
+        e = torch.sum(torch.max(torch.zeros_like(emb_as,
+            device=emb_as.device), emb_bs - emb_as)**2, dim=1)
+        return e
+
+    def criterion(self, pred, intersect_embs, labels):
+        """Loss function for order emb.
+        The e term is the amount of violation (if b is a subgraph of a).
+        For positive examples, the e term is minimized (close to 0); 
+        for negative examples, the e term is trained to be at least greater than self.margin.
+
+        pred: lists of embeddings outputted by forward
+        intersect_embs: not used
+        labels: subgraph labels for each entry in pred
+        """
+        emb_as, emb_bs = pred
+        e = torch.sum(torch.clamp(emb_bs - emb_as, min=0)**2, dim=1)
+
+        pos_loss = e[labels==1].sum()
+        neg_loss = torch.clamp(self.margin - e[labels==0], min=0).sum()
+        return pos_loss + neg_loss
+
 
 class SAGEConv(pyg_nn.MessagePassing):
     def __init__(self, in_channels, out_channels, aggr="add"):
