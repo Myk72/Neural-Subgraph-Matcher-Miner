@@ -54,7 +54,7 @@ class SkipLastGNN(nn.Module):
         post_input_dim = hidden_dim * (args.n_layers + 1)
         if args.conv_type == "PNA":
             post_input_dim *= 3
-
+            
         self.post_mp = nn.Sequential(
             nn.Linear(post_input_dim, hidden_dim),
             nn.BatchNorm1d(hidden_dim),
@@ -62,6 +62,7 @@ class SkipLastGNN(nn.Module):
             nn.Dropout(args.dropout),
             nn.Linear(hidden_dim, hidden_dim)
         )
+
 
         #self.batch_norm = nn.BatchNorm1d(output_dim, eps=1e-5, momentum=0.1)
 
@@ -195,11 +196,16 @@ class OrderEmbedder(nn.Module):
         labels: subgraph labels for each entry in pred
         """
         emb_as, emb_bs = pred
-        e = torch.sum(torch.clamp(emb_bs - emb_as, min=0)**2, dim=1)
+        e = torch.sum(torch.max(torch.zeros_like(emb_as,
+            device=utils.get_device()), emb_bs - emb_as)**2, dim=1)
 
-        pos_loss = e[labels==1].sum()
-        neg_loss = torch.clamp(self.margin - e[labels==0], min=0).sum()
-        return pos_loss + neg_loss
+        margin = self.margin
+        e[labels == 0] = torch.max(torch.tensor(0.0,
+            device=utils.get_device()), margin - e)[labels == 0]
+
+        relation_loss = torch.sum(e)
+
+        return relation_loss
 
 
 class SAGEConv(pyg_nn.MessagePassing):
